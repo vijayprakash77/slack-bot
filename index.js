@@ -4,36 +4,44 @@ const bodyParser = require('body-parser');
 const axios = require('axios');
 
 // Initialize Express app
- const app = express();
+const app = express();
 const port = process.env.PORT || 3000;
 
 // Middleware for parsing request bodies
 app.use(bodyParser.urlencoded({ extended: true }));
 app.use(bodyParser.json());
 
-
-// extract body from request before send to respective handler
-app.use(bodyParser.json());
+// Helper middleware to handle Slack payloads which may be URL-encoded
+app.use('/slack/events', (req, res, next) => {
+  if (req.body.payload) {
+    // If payload exists as a string, parse it
+    req.body = JSON.parse(req.body.payload);
+  }
+  next();
+});
 
 app.get('/api/bot', (req, res) => {
     res.json({ message: 'Hello from Slack Approval Bot!' });
-})
+});
 
 app.post('/slack/events', (req, res) => {
   const payload = req.body;
   
+  console.log('Received payload type:', payload.type);
+  
   // Handle different types of payloads
- if (payload.command === '/approval-test') {
+  if (payload.command === '/approval-test') {
     // Handle slash command
     handleSlashCommand(payload, res);
   } else if (payload.type === 'block_actions') {
     // Handle interactive button clicks
-    handleInteractiveActions(JSON.parse(payload.payload), res);
+    handleInteractiveActions(payload, res);
   } else if (payload.type === 'view_submission') {
     // Handle modal submission
-    handleViewSubmission(JSON.parse(payload.payload), res);
+    handleViewSubmission(payload, res);
   } else {
     // Unknown event type
+    console.log('Unknown payload:', payload);
     return res.status(404).send('Event type not supported');
   }
 });
@@ -108,6 +116,10 @@ const handleSlashCommand = (payload, res) => {
       'Authorization': `Bearer ${process.env.SLACK_BOT_TOKEN}`,
       'Content-Type': 'application/json'
     }
+  }).then(response => {
+    if (!response.data.ok) {
+      console.error('Error opening modal:', response.data);
+    }
   }).catch(error => {
     console.error('Error opening modal:', error.response?.data || error.message);
   });
@@ -115,82 +127,29 @@ const handleSlashCommand = (payload, res) => {
 
 // Function to handle modal submission
 const handleViewSubmission = (payload, res) => {
-  // Acknowledge the view submission
-  res.status(200).send();
+  console.log('Modal submission received');
   
-  const view = payload.view;
-  // Extract the values from the modal
-  const approver = view.state.values.approver_block.approver_select.selected_user;
-  const approvalText = view.state.values.approval_text_block.approval_text_input.value;
-  const requester = payload.user.id;
-  
-  // Send message to approver with approve/reject buttons
-  const approvalMessage = {
-    channel: approver,
-    text: `You have a new approval request from <@${requester}>:`,
-    blocks: [
-      {
-        type: 'section',
-        text: {
-          type: 'mrkdwn',
-          text: `*New Approval Request from <@${requester}>*`
-        }
-      },
-      {
-        type: 'section',
-        text: {
-          type: 'mrkdwn',
-          text: `>_${approvalText}_`
-        }
-      },
-      {
-        type: 'actions',
-        block_id: 'approval_actions',
-        elements: [
-          {
-            type: 'button',
-            text: {
-              type: 'plain_text',
-              text: 'Approve',
-              emoji: true
-            },
-            style: 'primary',
-            value: JSON.stringify({ requester, approvalText }),
-            action_id: 'approve_request'
-          },
-          {
-            type: 'button',
-            text: {
-              type: 'plain_text',
-              text: 'Reject',
-              emoji: true
-            },
-            style: 'danger',
-            value: JSON.stringify({ requester, approvalText }),
-            action_id: 'reject_request'
-          }
-        ]
-      }
-    ]
-  };
-  
-  // Call the chat.postMessage API
-  axios.post('https://slack.com/api/chat.postMessage', approvalMessage, {
-    headers: {
-      'Authorization': `Bearer ${process.env.SLACK_BOT_TOKEN}`,
-      'Content-Type': 'application/json'
-    }
-  }).then(() => {
-    // Notify requester that their request has been sent
-    const requesterMessage = {
-      channel: requester,
-      text: `Your approval request has been sent to <@${approver}>. You'll be notified when they respond.`,
+  try {
+    // Extract the values from the modal
+    const view = payload.view;
+    const approver = view.state.values.approver_block.approver_select.selected_user;
+    const approvalText = view.state.values.approval_text_block.approval_text_input.value;
+    const requester = payload.user.id;
+    
+    // Important: Return an empty response to acknowledge the view_submission
+    // This prevents the "dispatch_failed" error
+    res.status(200).send();
+    
+    // Send message to approver with approve/reject buttons
+    const approvalMessage = {
+      channel: approver,
+      text: `You have a new approval request from <@${requester}>:`,
       blocks: [
         {
           type: 'section',
           text: {
             type: 'mrkdwn',
-            text: `Your approval request has been sent to <@${approver}>. You'll be notified when they respond.`
+            text: `*New Approval Request from <@${requester}>*`
           }
         },
         {
@@ -199,19 +158,89 @@ const handleViewSubmission = (payload, res) => {
             type: 'mrkdwn',
             text: `>_${approvalText}_`
           }
+        },
+        {
+          type: 'actions',
+          block_id: 'approval_actions',
+          elements: [
+            {
+              type: 'button',
+              text: {
+                type: 'plain_text',
+                text: 'Approve',
+                emoji: true
+              },
+              style: 'primary',
+              value: JSON.stringify({ requester, approvalText }),
+              action_id: 'approve_request'
+            },
+            {
+              type: 'button',
+              text: {
+                type: 'plain_text',
+                text: 'Reject',
+                emoji: true
+              },
+              style: 'danger',
+              value: JSON.stringify({ requester, approvalText }),
+              action_id: 'reject_request'
+            }
+          ]
         }
       ]
     };
     
-    return axios.post('https://slack.com/api/chat.postMessage', requesterMessage, {
+    // Call the chat.postMessage API
+    axios.post('https://slack.com/api/chat.postMessage', approvalMessage, {
       headers: {
         'Authorization': `Bearer ${process.env.SLACK_BOT_TOKEN}`,
         'Content-Type': 'application/json'
       }
+    }).then(response => {
+      if (!response.data.ok) {
+        console.error('Error sending approval message:', response.data);
+        return;
+      }
+      
+      // Notify requester that their request has been sent
+      const requesterMessage = {
+        channel: requester,
+        text: `Your approval request has been sent to <@${approver}>. You'll be notified when they respond.`,
+        blocks: [
+          {
+            type: 'section',
+            text: {
+              type: 'mrkdwn',
+              text: `Your approval request has been sent to <@${approver}>. You'll be notified when they respond.`
+            }
+          },
+          {
+            type: 'section',
+            text: {
+              type: 'mrkdwn',
+              text: `>_${approvalText}_`
+            }
+          }
+        ]
+      };
+      
+      return axios.post('https://slack.com/api/chat.postMessage', requesterMessage, {
+        headers: {
+          'Authorization': `Bearer ${process.env.SLACK_BOT_TOKEN}`,
+          'Content-Type': 'application/json'
+        }
+      });
+    }).then(response => {
+      if (response && !response.data.ok) {
+        console.error('Error sending requester message:', response.data);
+      }
+    }).catch(error => {
+      console.error('Error sending messages:', error.response?.data || error.message);
     });
-  }).catch(error => {
-    console.error('Error sending messages:', error.response?.data || error.message);
-  });
+  } catch (error) {
+    console.error('Error processing modal submission:', error);
+    res.status(200).send(); // Still acknowledge to Slack even if there's an error
+  }
 };
 
 // Function to handle interactive button actions
@@ -267,7 +296,12 @@ const handleInteractiveActions = (payload, res) => {
         'Authorization': `Bearer ${process.env.SLACK_BOT_TOKEN}`,
         'Content-Type': 'application/json'
       }
-    }).then(() => {
+    }).then(response => {
+      if (!response.data.ok) {
+        console.error('Error updating message:', response.data);
+        return;
+      }
+      
       // Notify the requester of approval
       const notificationMessage = {
         channel: requester,
@@ -296,6 +330,10 @@ const handleInteractiveActions = (payload, res) => {
           'Content-Type': 'application/json'
         }
       });
+    }).then(response => {
+      if (response && !response.data.ok) {
+        console.error('Error sending notification message:', response.data);
+      }
     }).catch(error => {
       console.error('Error handling approval:', error.response?.data || error.message);
     });
@@ -336,7 +374,12 @@ const handleInteractiveActions = (payload, res) => {
         'Authorization': `Bearer ${process.env.SLACK_BOT_TOKEN}`,
         'Content-Type': 'application/json'
       }
-    }).then(() => {
+    }).then(response => {
+      if (!response.data.ok) {
+        console.error('Error updating message:', response.data);
+        return;
+      }
+      
       // Notify the requester of rejection
       const notificationMessage = {
         channel: requester,
@@ -365,6 +408,10 @@ const handleInteractiveActions = (payload, res) => {
           'Content-Type': 'application/json'
         }
       });
+    }).then(response => {
+      if (response && !response.data.ok) {
+        console.error('Error sending notification message:', response.data);
+      }
     }).catch(error => {
       console.error('Error handling rejection:', error.response?.data || error.message);
     });
