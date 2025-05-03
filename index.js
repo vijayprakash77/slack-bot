@@ -19,6 +19,7 @@ app.use('/slack/events', (req, res, next) => {
   next();
 });
 
+//testing server
 app.get('/api/bot', (req, res) => {
     res.json({ message: 'Hello from Slack Approval Bot!' });
 });
