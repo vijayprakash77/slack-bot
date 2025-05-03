@@ -17,6 +17,7 @@ app.use(bodyParser.json());
 
 app.get('/api/bot', (req, res) => {
     res.json({ message: 'Hello from Slack Approval Bot!' });
+    console.log(process.env.SLACK_BOT_TOKEN);
 })
 
 app.post('/slack/events', (req, res) => {
