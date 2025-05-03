@@ -14,7 +14,6 @@ app.use(bodyParser.json());
 // Helper middleware to handle Slack payloads which may be URL-encoded
 app.use('/slack/events', (req, res, next) => {
   if (req.body.payload) {
-    // If payload exists as a string, parse it
     req.body = JSON.parse(req.body.payload);
   }
   next();
