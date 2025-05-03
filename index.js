@@ -15,6 +15,10 @@ app.use(bodyParser.json());
 // extract body from request before send to respective handler
 app.use(bodyParser.json());
 
+app.get('/api/bot', (req, res) => {
+    res.json({ message: 'Hello from Slack Approval Bot!' });
+})
+
 app.post('/slack/events', (req, res) => {
   const payload = req.body;
   
